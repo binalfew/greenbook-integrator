@@ -17,12 +17,12 @@ import org.springframework.batch.item.ItemReader;
 import org.springframework.batch.item.ItemWriter;
 import org.springframework.batch.item.database.builder.JdbcBatchItemWriterBuilder;
 import org.springframework.batch.item.file.builder.FlatFileItemReaderBuilder;
+import org.springframework.batch.core.configuration.annotation.StepScope;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.lang.NonNull;
 
 import javax.sql.DataSource;
 import java.io.IOException;
@@ -53,28 +53,29 @@ public class ApplicationConfig {
 
     private void validateHeader(Path file, String... expectedHeaders) throws IOException {
         String headerLine;
-
-        // Always close the stream
         try (var lines = Files.lines(file)) {
             headerLine = lines.findFirst().orElse("");
         }
 
         String[] actual = headerLine.split(",");
-
         if (actual.length != expectedHeaders.length) {
-            throw new IllegalStateException("❌ Invalid header column count in " + file + ". Expected " + expectedHeaders.length + " columns, found " + actual.length);
+            throw new IllegalStateException("❌ Invalid header column count in " + file +
+                    ". Expected " + expectedHeaders.length + " columns, found " + actual.length);
         }
-
         for (int i = 0; i < expectedHeaders.length; i++) {
             if (!actual[i].trim().equalsIgnoreCase(expectedHeaders[i])) {
-                throw new IllegalStateException("❌ Invalid header in " + file + ". Expected '" + expectedHeaders[i] + "', found '" + actual[i] + "'");
+                throw new IllegalStateException("❌ Invalid header in " + file +
+                        ". Expected '" + expectedHeaders[i] + "', found '" + actual[i] + "'");
             }
         }
     }
 
-    // --- Readers ---
+    // --- Readers (step-scoped) ---
     @Bean
-    ItemReader<Office> officeReader(@Value("${azure.storage.connection-string}") String connectionString, @Value("${azure.storage.container-name}") String containerName) throws IOException {
+    @StepScope
+    ItemReader<Office> officeReader(
+            @Value("${azure.storage.connection-string}") String connectionString,
+            @Value("${azure.storage.container-name}") String containerName) throws IOException {
         Path file = downloadBlob(connectionString, containerName, "offices.csv");
         validateHeader(file, "id", "name");
 
@@ -89,7 +90,10 @@ public class ApplicationConfig {
     }
 
     @Bean
-    ItemReader<Department> departmentReader(@Value("${azure.storage.connection-string}") String connectionString, @Value("${azure.storage.container-name}") String containerName) throws IOException {
+    @StepScope
+    ItemReader<Department> departmentReader(
+            @Value("${azure.storage.connection-string}") String connectionString,
+            @Value("${azure.storage.container-name}") String containerName) throws IOException {
         Path file = downloadBlob(connectionString, containerName, "departments.csv");
         validateHeader(file, "id", "name");
 
@@ -108,7 +112,7 @@ public class ApplicationConfig {
     ItemWriter<Office> officeWriter(DataSource dataSource) {
         return new JdbcBatchItemWriterBuilder<Office>()
                 .dataSource(dataSource)
-                .sql("INSERT INTO Office (name) VALUES (?)")
+                .sql("INSERT INTO \"Office\" (\"name\") VALUES (?)")
                 .itemPreparedStatementSetter((item, ps) -> ps.setString(1, item.name()))
                 .build();
     }
@@ -117,29 +121,33 @@ public class ApplicationConfig {
     ItemWriter<Department> departmentWriter(DataSource dataSource) {
         return new JdbcBatchItemWriterBuilder<Department>()
                 .dataSource(dataSource)
-                .sql("INSERT INTO Department (name) VALUES (?)")
+                .sql("INSERT INTO \"Department\" (\"name\") VALUES (?)")
                 .itemPreparedStatementSetter((item, ps) -> ps.setString(1, item.name()))
                 .build();
     }
 
     // --- Steps ---
     @Bean
-    Step officeStep(JobRepository repository, PlatformTransactionManager transactionManager, ItemReader<Office> officeReader, ItemWriter<Office> officeWriter) {
+    Step officeStep(JobRepository repository,
+                    PlatformTransactionManager transactionManager,
+                    ItemReader<Office> officeReader,
+                    ItemWriter<Office> officeWriter) {
         return new StepBuilder("officeStep", repository)
                 .<Office, Office>chunk(10, transactionManager)
                 .reader(officeReader)
                 .writer(officeWriter)
-                .listener(stepCleanupListener("offices.csv"))
                 .build();
     }
 
     @Bean
-    Step departmentStep(JobRepository repository, PlatformTransactionManager transactionManager, ItemReader<Department> departmentReader, ItemWriter<Department> departmentWriter) {
+    Step departmentStep(JobRepository repository,
+                        PlatformTransactionManager transactionManager,
+                        ItemReader<Department> departmentReader,
+                        ItemWriter<Department> departmentWriter) {
         return new StepBuilder("departmentStep", repository)
                 .<Department, Department>chunk(10, transactionManager)
                 .reader(departmentReader)
                 .writer(departmentWriter)
-                .listener(stepCleanupListener("departments.csv"))
                 .build();
     }
 
@@ -151,33 +159,5 @@ public class ApplicationConfig {
                 .start(officeStep)
                 .next(departmentStep)
                 .build();
-    }
-
-    // --- Cleanup Listener (per step) ---
-    private StepExecutionListener stepCleanupListener(String fileName) {
-        return new StepExecutionListener() {
-            private Path tempFilePath;
-
-            @Override
-            public void beforeStep(@NonNull StepExecution stepExecution) {
-                // store path in ExecutionContext for afterStep
-                tempFilePath = stepExecution.getExecutionContext().containsKey(fileName)
-                        ? (Path) stepExecution.getExecutionContext().get(fileName)
-                        : null;
-            }
-
-            @Override
-            public ExitStatus afterStep(@NonNull StepExecution stepExecution) {
-                if (tempFilePath != null) {
-                    try {
-                        Files.deleteIfExists(tempFilePath);
-                        log.info("🧹 Temp file {} deleted after step.", tempFilePath);
-                    } catch (IOException e) {
-                        log.warn("⚠️ Failed to delete temp file {}", tempFilePath, e);
-                    }
-                }
-                return stepExecution.getExitStatus();
-            }
-        };
     }
 }
