@@ -114,8 +114,15 @@ public class ApplicationConfig {
     ItemWriter<Office> officeWriter(DataSource dataSource) {
         return new JdbcBatchItemWriterBuilder<Office>()
                 .dataSource(dataSource)
-                .sql("INSERT INTO \"Office\" (\"name\") VALUES (?)")
-                .itemPreparedStatementSetter((item, ps) -> ps.setString(1, item.name()))
+                .sql("""
+                            INSERT INTO "Office" ("id", "name") 
+                            VALUES (?, ?) 
+                            ON CONFLICT ("name") DO NOTHING
+                        """)
+                .itemPreparedStatementSetter((item, ps) -> {
+                    ps.setObject(1, java.util.UUID.randomUUID()); // new UUID
+                    ps.setString(2, item.name());
+                })
                 .build();
     }
 
@@ -123,10 +130,18 @@ public class ApplicationConfig {
     ItemWriter<Department> departmentWriter(DataSource dataSource) {
         return new JdbcBatchItemWriterBuilder<Department>()
                 .dataSource(dataSource)
-                .sql("INSERT INTO \"Department\" (\"name\") VALUES (?)")
-                .itemPreparedStatementSetter((item, ps) -> ps.setString(1, item.name()))
+                .sql("""
+                            INSERT INTO "Department" ("id", "name") 
+                            VALUES (?, ?) 
+                            ON CONFLICT ("name") DO NOTHING
+                        """)
+                .itemPreparedStatementSetter((item, ps) -> {
+                    ps.setObject(1, java.util.UUID.randomUUID()); // new UUID
+                    ps.setString(2, item.name());
+                })
                 .build();
     }
+
 
     // --- Steps ---
     @Bean
