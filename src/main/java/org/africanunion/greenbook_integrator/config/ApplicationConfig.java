@@ -4,20 +4,23 @@ import com.azure.storage.blob.BlobClient;
 import com.azure.storage.blob.BlobContainerClient;
 import com.azure.storage.blob.BlobServiceClient;
 import com.azure.storage.blob.BlobServiceClientBuilder;
-import org.africanunion.greenbook_integrator.records.Office;
 import org.africanunion.greenbook_integrator.records.Department;
+import org.africanunion.greenbook_integrator.records.Office;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.batch.core.*;
+import org.springframework.batch.core.Job;
+import org.springframework.batch.core.Step;
+import org.springframework.batch.core.StepExecution;
+import org.springframework.batch.core.StepExecutionListener;
+import org.springframework.batch.core.configuration.annotation.StepScope;
 import org.springframework.batch.core.job.builder.JobBuilder;
 import org.springframework.batch.core.launch.support.RunIdIncrementer;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.core.step.builder.StepBuilder;
-import org.springframework.batch.item.ItemReader;
 import org.springframework.batch.item.ItemWriter;
 import org.springframework.batch.item.database.builder.JdbcBatchItemWriterBuilder;
+import org.springframework.batch.item.file.FlatFileItemReader;
 import org.springframework.batch.item.file.builder.FlatFileItemReaderBuilder;
-import org.springframework.batch.core.configuration.annotation.StepScope;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -59,8 +62,7 @@ public class ApplicationConfig {
 
         String[] actual = headerLine.split(",");
         if (actual.length != expectedHeaders.length) {
-            throw new IllegalStateException("❌ Invalid header column count in " + file +
-                    ". Expected " + expectedHeaders.length + " columns, found " + actual.length);
+            throw new IllegalStateException("❌ Invalid header column count in " + file);
         }
         for (int i = 0; i < expectedHeaders.length; i++) {
             if (!actual[i].trim().equalsIgnoreCase(expectedHeaders[i])) {
@@ -70,41 +72,41 @@ public class ApplicationConfig {
         }
     }
 
-    // --- Readers (step-scoped) ---
+    // --- Readers ---
     @Bean
     @StepScope
-    ItemReader<Office> officeReader(
+    FlatFileItemReader<Office> officeReader(
             @Value("${azure.storage.connection-string}") String connectionString,
             @Value("${azure.storage.container-name}") String containerName) throws IOException {
-        Path file = downloadBlob(connectionString, containerName, "offices.csv");
-        validateHeader(file, "id", "name");
-
-        return new FlatFileItemReaderBuilder<Office>()
-                .resource(new FileSystemResource(file))
+        FlatFileItemReader<Office> reader = new FlatFileItemReaderBuilder<Office>()
                 .name("officeReader")
                 .delimited()
-                .names("id", "name") // ignore id
+                .names("id", "name")
                 .linesToSkip(1)
                 .fieldSetMapper(fieldSet -> new Office(fieldSet.readString("name")))
                 .build();
+
+        // Resource will be set later in beforeStep()
+        reader.setStrict(false);
+        return reader;
     }
 
     @Bean
     @StepScope
-    ItemReader<Department> departmentReader(
+    FlatFileItemReader<Department> departmentReader(
             @Value("${azure.storage.connection-string}") String connectionString,
             @Value("${azure.storage.container-name}") String containerName) throws IOException {
-        Path file = downloadBlob(connectionString, containerName, "departments.csv");
-        validateHeader(file, "id", "name");
 
-        return new FlatFileItemReaderBuilder<Department>()
-                .resource(new FileSystemResource(file))
+        FlatFileItemReader<Department> reader = new FlatFileItemReaderBuilder<Department>()
                 .name("departmentReader")
                 .delimited()
-                .names("id", "name") // ignore id
+                .names("id", "name")
                 .linesToSkip(1)
                 .fieldSetMapper(fieldSet -> new Department(fieldSet.readString("name")))
                 .build();
+
+        reader.setStrict(false);
+        return reader;
     }
 
     // --- Writers ---
@@ -130,24 +132,54 @@ public class ApplicationConfig {
     @Bean
     Step officeStep(JobRepository repository,
                     PlatformTransactionManager transactionManager,
-                    ItemReader<Office> officeReader,
-                    ItemWriter<Office> officeWriter) {
+                    FlatFileItemReader<Office> officeReader,
+                    ItemWriter<Office> officeWriter,
+                    @Value("${azure.storage.connection-string}") String connectionString,
+                    @Value("${azure.storage.container-name}") String containerName) {
+
         return new StepBuilder("officeStep", repository)
                 .<Office, Office>chunk(10, transactionManager)
                 .reader(officeReader)
                 .writer(officeWriter)
+                .listener(new StepExecutionListener() {
+                    @Override
+                    public void beforeStep(StepExecution stepExecution) {
+                        try {
+                            Path file = downloadBlob(connectionString, containerName, "offices.csv");
+                            validateHeader(file, "id", "name");
+                            officeReader.setResource(new FileSystemResource(file));
+                        } catch (IOException e) {
+                            throw new RuntimeException(e);
+                        }
+                    }
+                })
                 .build();
     }
 
     @Bean
     Step departmentStep(JobRepository repository,
                         PlatformTransactionManager transactionManager,
-                        ItemReader<Department> departmentReader,
-                        ItemWriter<Department> departmentWriter) {
+                        FlatFileItemReader<Department> departmentReader,
+                        ItemWriter<Department> departmentWriter,
+                        @Value("${azure.storage.connection-string}") String connectionString,
+                        @Value("${azure.storage.container-name}") String containerName) {
+
         return new StepBuilder("departmentStep", repository)
                 .<Department, Department>chunk(10, transactionManager)
                 .reader(departmentReader)
                 .writer(departmentWriter)
+                .listener(new StepExecutionListener() {
+                    @Override
+                    public void beforeStep(StepExecution stepExecution) {
+                        try {
+                            Path file = downloadBlob(connectionString, containerName, "departments.csv");
+                            validateHeader(file, "id", "name");
+                            departmentReader.setResource(new FileSystemResource(file));
+                        } catch (IOException e) {
+                            throw new RuntimeException(e);
+                        }
+                    }
+                })
                 .build();
     }
 
