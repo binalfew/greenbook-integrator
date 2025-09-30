@@ -115,13 +115,17 @@ public class ApplicationConfig {
         return new JdbcBatchItemWriterBuilder<Office>()
                 .dataSource(dataSource)
                 .sql("""
-                            INSERT INTO "Office" ("id", "name") 
-                            VALUES (?, ?) 
-                            ON CONFLICT ("name") DO NOTHING
+                            INSERT INTO "Office" ("id", "name", "createdAt", "updatedAt") 
+                            VALUES (?, ?, ?, ?) 
+                            ON CONFLICT ("name") 
+                            DO UPDATE SET "updatedAt" = EXCLUDED."updatedAt"
                         """)
                 .itemPreparedStatementSetter((item, ps) -> {
+                    java.time.LocalDateTime now = java.time.LocalDateTime.now();
                     ps.setObject(1, java.util.UUID.randomUUID()); // new UUID
                     ps.setString(2, item.name());
+                    ps.setObject(3, now);
+                    ps.setObject(4, now);
                 })
                 .build();
     }
