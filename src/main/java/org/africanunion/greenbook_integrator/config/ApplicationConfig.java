@@ -143,6 +143,7 @@ public class ApplicationConfig {
                     ps.setObject(1, java.util.UUID.randomUUID()); // new UUID
                     ps.setString(2, item.name());
                 })
+                .assertUpdates(false) // ✅ allow UPSERTs that don't change anything
                 .build();
     }
 
