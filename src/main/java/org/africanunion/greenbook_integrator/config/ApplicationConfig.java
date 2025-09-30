@@ -127,6 +127,7 @@ public class ApplicationConfig {
                     ps.setObject(3, now);
                     ps.setObject(4, now);
                 })
+                .assertUpdates(false) // ✅ allow UPSERTs that don't change anything
                 .build();
     }
 
